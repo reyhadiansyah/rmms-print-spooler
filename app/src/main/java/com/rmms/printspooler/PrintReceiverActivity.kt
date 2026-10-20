@@ -5,59 +5,82 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class PrintReceiverActivity : Activity() {
+    companion object {
+        private val bgScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val data: Uri? = intent?.data
+        val appContext = applicationContext
+
         if (data != null && data.scheme == "rmmsprintspooler" && data.host == "print") {
             val rawPayload = data.getQueryParameter("payload")
-            if (rawPayload != null) {
-                processPrintJob(rawPayload)
+            val requestedProfile = data.getQueryParameter("profile")
+            val requestedTemplate = data.getQueryParameter("template")
+
+            if (!rawPayload.isNullOrEmpty()) {
+                executeSilentPrint(appContext, rawPayload, requestedProfile, requestedTemplate)
             } else {
-                Toast.makeText(this, "Data cetak (payload) kosong!", Toast.LENGTH_LONG).show()
-                finish()
+                Toast.makeText(appContext, "Data cetak dari Power Apps kosong!", Toast.LENGTH_LONG).show()
             }
-        } else {
-            finish()
         }
+
+        finish()
+        overridePendingTransition(0, 0)
     }
 
-    private fun processPrintJob(jsonPayload: String) {
-        val configManager = PrinterConfigManager(this)
-        val printEngine = ThermalPrintEngine(this)
+    private fun executeSilentPrint(
+        appContext: android.content.Context,
+        jsonPayload: String,
+        requestedProfileName: String?,
+        requestedTemplateName: String?
+    ) {
+        val configManager = PrinterConfigManager(appContext)
+        val printEngine = ThermalPrintEngine(appContext)
 
-        CoroutineScope(Dispatchers.Main).launch {
+        bgScope.launch {
             try {
-                val config = configManager.configFlow.first()
-                val payload = Gson().fromJson(jsonPayload, PrintPayload::class.java)
+                val state = configManager.stateFlow.first()
 
-                Toast.makeText(
-                    this@PrintReceiverActivity,
-                    "Mencetak ke ${config.printerName}...",
-                    Toast.LENGTH_SHORT
-                ).show()
+                val profile = if (!requestedProfileName.isNullOrEmpty()) {
+                    state.profiles.find { it.profileName.equals(requestedProfileName, ignoreCase = true) }
+                        ?: state.profiles.find { it.id == state.activeProfileId }
+                        ?: state.profiles.first()
+                } else {
+                    state.profiles.find { it.id == state.activeProfileId } ?: state.profiles.first()
+                }
 
-                val result = printEngine.printData(config, payload)
+                val template = if (!requestedTemplateName.isNullOrEmpty()) {
+                    state.templates.find { it.name.equals(requestedTemplateName, ignoreCase = true) }
+                        ?: state.templates.find { it.id == profile.activeTemplateId }
+                        ?: state.templates.first()
+                } else {
+                    state.templates.find { it.id == profile.activeTemplateId } ?: state.templates.first()
+                }
+
+                val mapType = object : TypeToken<Map<String, Any>>() {}.type
+                val payloadMap: Map<String, Any> = Gson().fromJson(jsonPayload, mapType)
+
+                Toast.makeText(appContext, "Mencetak (${profile.printerName})...", Toast.LENGTH_SHORT).show()
+
+                val result = printEngine.printDynamicData(profile, template, payloadMap)
                 result.onSuccess { msg ->
-                    Toast.makeText(this@PrintReceiverActivity, msg, Toast.LENGTH_SHORT).show()
+                    Toast.makeText(appContext, msg, Toast.LENGTH_SHORT).show()
                 }.onFailure { err ->
-                    Toast.makeText(this@PrintReceiverActivity, err.message, Toast.LENGTH_LONG).show()
+                    Toast.makeText(appContext, err.message, Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(
-                    this@PrintReceiverActivity,
-                    "Format JSON tidak valid: {e.message}",
-                    Toast.LENGTH_LONG
-                ).show()
-            } finally {
-                finish()
+                Toast.makeText(appContext, "Gagal memproses JSON: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }

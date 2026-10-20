@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,38 +35,100 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    ConfigScreen(configManager, printEngine)
+                    MainScreen(configManager, printEngine)
                 }
             }
         }
     }
 }
 
+@Composable
+fun MainScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintEngine) {
+    val state by configManager.stateFlow.collectAsState(initial = AppStateData())
+    val scope = rememberCoroutineScope()
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val isId = state.language == "id"
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (isId) "Konfigurasi Printer Thermal" else "Thermal Printer Settings",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        configManager.saveState(state.copy(language = if (isId) "en" else "id"))
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(if (isId) "EN" else "ID")
+            }
+        }
+
+        TabRow(selectedTabIndex = selectedTab) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text(if (isId) "Profil & Koneksi" else "Profiles & Printer") }
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text(if (isId) "Template Label" else "Label Templates") }
+            )
+        }
+
+        if (selectedTab == 0) {
+            ProfileConfigTab(state, configManager, printEngine, isId)
+        } else {
+            TemplateBuilderTab(state, configManager, isId)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("MissingPermission")
 @Composable
-fun ConfigScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintEngine) {
+fun ProfileConfigTab(
+    state: AppStateData,
+    configManager: PrinterConfigManager,
+    printEngine: ThermalPrintEngine,
+    isId: Boolean
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val savedConfig by configManager.configFlow.collectAsState(initial = PrinterConfig())
 
-    var selectedName by remember(savedConfig) { mutableStateOf(savedConfig.printerName) }
-    var selectedMac by remember(savedConfig) { mutableStateOf(savedConfig.printerMac) }
-    var paperType by remember(savedConfig) { mutableStateOf(savedConfig.paperType) }
-    var paperWidth by remember(savedConfig) { mutableStateOf(savedConfig.paperWidthMm.toString()) }
-    var labelHeight by remember(savedConfig) { mutableStateOf(savedConfig.labelHeightMm.toString()) }
-    var labelGap by remember(savedConfig) { mutableStateOf(savedConfig.labelGapMm.toString()) }
-    var lang by remember(savedConfig) { mutableStateOf(savedConfig.appLanguage) }
+    val activeProfile = state.profiles.find { it.id == state.activeProfileId } ?: state.profiles.first()
 
-    var pairedDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
+    var profileName by remember(activeProfile) { mutableStateOf(activeProfile.profileName) }
+    var printerName by remember(activeProfile) { mutableStateOf(activeProfile.printerName) }
+    var printerMac by remember(activeProfile) { mutableStateOf(activeProfile.printerMac) }
+    var printMode by remember(activeProfile) { mutableStateOf(activeProfile.printMode) }
+    var paperWidth by remember(activeProfile) { mutableStateOf(activeProfile.paperWidthMm.toString()) }
+    var labelHeight by remember(activeProfile) { mutableStateOf(activeProfile.labelHeightMm.toString()) }
+    var labelGap by remember(activeProfile) { mutableStateOf(activeProfile.labelGapMm.toString()) }
+    var selectedTemplateId by remember(activeProfile) { mutableStateOf(activeProfile.activeTemplateId) }
+
+    var showProfileDropdown by remember { mutableStateOf(false) }
+    var showTemplateDropdown by remember { mutableStateOf(false) }
     var showDeviceDialog by remember { mutableStateOf(false) }
-
-    val isId = lang == "id"
+    var pairedDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val granted = permissions.entries.all { it.value }
-        if (granted) {
+    ) { perms ->
+        if (perms.values.all { it }) {
             pairedDevices = printEngine.getPairedPrinters()
             showDeviceDialog = true
         } else {
@@ -76,27 +139,91 @@ fun ConfigScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintE
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp)
+            .padding(16.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
 
         // Header
+        Text(
+            text = if (isId) "Pilih Profil Konfigurasi Aktif" else "Select Active Configuration Profile",
+            fontWeight = FontWeight.Bold
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = if (isId) "Konfigurasi Printer Thermal" else "Thermal Printer Settings",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
+            ExposedDropdownMenuBox(
+                expanded = showProfileDropdown,
+                onExpandedChange = { showProfileDropdown = !showProfileDropdown },
+                modifier = Modifier.weight(1f)
+            ) {
+                OutlinedTextField(
+                    value = activeProfile.profileName,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showProfileDropdown) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = showProfileDropdown,
+                    onDismissRequest = { showProfileDropdown = false }
+                ) {
+                    state.profiles.forEach { prof ->
+                        DropdownMenuItem(
+                            text = { Text(prof.profileName) },
+                            onClick = {
+                                showProfileDropdown = false
+                                scope.launch {
+                                    configManager.saveState(state.copy(activeProfileId = prof.id))
+                                }
+                            }
+                        )
+                    }
+                }
+            }
 
-            TextButton(onClick = { lang = if (isId) "en" else "id" }) {
-                Text(if (isId) "Ganti ke Inggris" else "Change to Bahasa Indonesia")
+            FilledTonalButton(onClick = {
+                val newProf = PrinterProfile(
+                    id = UUID.randomUUID().toString(),
+                    profileName = "Profil Baru ${state.profiles.size + 1}"
+                )
+                scope.launch {
+                    configManager.saveState(
+                        state.copy(
+                            activeProfileId = newProf.id,
+                            profiles = state.profiles + newProf
+                        )
+                    )
+                }
+            }) {
+                Text("+ Baru")
+            }
+
+            if (state.profiles.size > 1) {
+                TextButton(onClick =  {
+                    val remaining = state.profiles.filterNot { it.id == activeProfile.id }
+                    scope.launch {
+                        configManager.saveState(
+                            state.copy(
+                                activeProfileId = remaining.first().id,
+                                profiles = remaining
+                            )
+                        )
+                    }
+                }) {
+                    Text(if (isId) "Hapus" else "Delete", color = MaterialTheme.colorScheme.error)
+                }
             }
         }
+
+        OutlinedTextField(
+            value = profileName,
+            onValueChange = { profileName = it },
+            label = { Text(if (isId) "Nama Profil" else "Profile Name") },
+            modifier = Modifier.fillMaxWidth()
+        )
 
         HorizontalDivider()
 
@@ -105,19 +232,18 @@ fun ConfigScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintE
             text = if (isId) "1. Perangkat Printer (Bluetooth)" else "1. Printer Device (Bluetooth)",
             fontWeight = FontWeight.SemiBold
         )
-
         OutlinedCard(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(text = selectedName, fontWeight = FontWeight.Bold)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = printerName, fontWeight = FontWeight.Bold)
                     Text(
-                        text = if (selectedMac.isEmpty()) "MAC: - " else "MAC: $selectedMac",
+                        text = if (printerMac.isEmpty()) "MAC: - " else "MAC: $printerMac",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -137,115 +263,183 @@ fun ConfigScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintE
 
         // Opsi Kedua
         Text(
-            text = if (isId) "2. Jenis Kertas & Mode Cetak" else "2. Paper Type & Print Mode",
+            text = if (isId) "2. Mode Bahasa & Jenis Kertas" else "2. Printer Language & Paper Mode",
             fontWeight = FontWeight.SemiBold
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(
-                selected = paperType == "LABEL_TSPL",
-                onClick = { paperType = "LABEL_TSPL" }
-            )
-            Text(if (isId) "Kertas Label Stiker (TSPL)" else "Sticker Label Paper (TSPL)")
-            Spacer(modifier = Modifier.width(16.dp))
-            RadioButton(
-                selected = paperType == "RECEIPT_ESCPOS",
-                onClick = { paperType = "RECEIPT_ESCPOS" }
-            )
-            Text(if (isId) "Kertas Struk Biasa (ESC/POS)" else "Continuous Receipt (ESC/POS)")
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { printMode = "ESCPOS_LABEL" }
+            ) {
+                RadioButton(
+                    selected = printMode == "ESCPOS_LABEL",
+                    onClick = { printMode = "ESCPOS_LABEL" }
+                )
+                Column {
+                    Text(
+                        text = if (isId) "Kertas Thermal Universal" else "Universal Thermal Paper",
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = if (isId) "Untuk printer dengan bahasa ESC/POS" else "For printer with ESC/POS language",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { printMode = "TSPL_LABEL" }
+            ) {
+                RadioButton(
+                    selected = printMode == "TSPL_LABEL",
+                    onClick = { printMode = "TSPL_LABEL" }
+                )
+                Column {
+                    Text(
+                        text = if (isId) "Kertas Thermal Label dengan Gap" else "Label Thermal Paper with Gap",
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = if (isId) "Untuk printer dengan bahasa TSPL" else "For printer with TSPL language",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
         }
 
         // Opsi Ketiga
         Text(
-            text = if (isId) "3. Dimensi Kertas (Milimeter)" else "3. Paper Dimensions (mm)",
+            text = if (isId) "3. Dimensi Kertas (mm)" else "3. Paper Dimensions (mm)",
             fontWeight = FontWeight.SemiBold
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = paperWidth,
                 onValueChange = { paperWidth = it },
-                label = { Text(if (isId) "Lebar Cetak (mm)" else "Print Width (mm)") },
+                label = { Text(if (isId) "Lebar (mm)" else "Width (mm)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.weight(1f)
             )
-            if (paperType == "LABEL_TSPL") {
+            if (printMode == "TSPL_LABEL") {
                 OutlinedTextField(
                     value = labelHeight,
                     onValueChange = { labelHeight = it },
-                    label = { Text(if (isId) "Tinggi Label (mm)" else "Label Height (mm)") },
+                    label = { Text(if (isId) "Tinggi (mm)" else "Height (mm)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 )
                 OutlinedTextField(
                     value = labelGap,
                     onValueChange = { labelGap = it },
-                    label = { Text(if (isId) "Jarak Gap (mm)" else "Gap Size (mm)") },
+                    label = { Text(if (isId) "Gap (mm)" else "Gap (mm)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f)
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        // Opsi Keempat
+        Text(
+            text = if (isId) "4. Template Label Aktif" else "4. Active Label Template",
+            fontWeight = FontWeight.SemiBold
+        )
+
+        val currentTemplate = state.templates.find { it.id == selectedTemplateId } ?: state.templates.first()
+        ExposedDropdownMenuBox(
+            expanded = showTemplateDropdown,
+            onExpandedChange = { showTemplateDropdown = !showTemplateDropdown }
+        ) {
+            OutlinedTextField(
+                value = currentTemplate.name,
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showTemplateDropdown) },
+                modifier = Modifier.menuAnchor().fillMaxWidth()
+            )
+            ExposedDropdownMenu(
+                expanded = showTemplateDropdown,
+                onDismissRequest = { showTemplateDropdown = false }
+            ) {
+                state.templates.forEach { tpl ->
+                    DropdownMenuItem(
+                        text = { Text(tpl.name) },
+                        onClick = {
+                            selectedTemplateId = tpl.id
+                            showTemplateDropdown = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         // Simpan & Test Print
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Button(
                 onClick = {
-                    val newConfig = PrinterConfig(
-                        printerName = selectedName,
-                        printerMac = selectedMac,
-                        paperType = paperType,
-                        paperWidthMm = paperWidth.toIntOrNull() ?: 72,
+                    val updatedProfile = activeProfile.copy(
+                        profileName = profileName,
+                        printerName = printerName,
+                        printerMac = printerMac,
+                        printMode = printMode,
+                        paperWidthMm = paperWidth.toIntOrNull() ?: 58,
                         labelHeightMm = labelHeight.toIntOrNull() ?: 40,
                         labelGapMm = labelGap.toIntOrNull() ?: 2,
-                        appLanguage = lang
+                        activeTemplateId = selectedTemplateId
                     )
+                    val updatedList = state.profiles.map {
+                        if (it.id == updatedProfile.id) updatedProfile else it
+                    }
                     scope.launch {
-                        configManager.saveConfig(newConfig)
-                        Toast.makeText(
-                            context,
-                            if (isId) "Konfigurasi berhasil disimpan!" else "Settings saved!",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        configManager.saveState(state.copy(profiles = updatedList))
+                        Toast.makeText(context, "Profil '${profileName}' disimpan!", Toast.LENGTH_SHORT).show()
                     }
                 },
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (isId) "Simpan Konfigurasi" else "Save Settings")
+                Text(if (isId) "Simpan Profil" else "Save Profile")
             }
 
             OutlinedButton(
                 onClick = {
-                    val testConfig = PrinterConfig(
-                        printerName = selectedName,
-                        printerMac = selectedMac,
-                        paperType = paperType,
-                        paperWidthMm = paperWidth.toIntOrNull() ?: 72,
+                    val testProfile = activeProfile.copy(
+                        profileName = profileName,
+                        printerName = printerName,
+                        printerMac = printerMac,
+                        printMode = printMode,
+                        paperWidthMm = paperWidth.toIntOrNull() ?: 58,
                         labelHeightMm = labelHeight.toIntOrNull() ?: 40,
                         labelGapMm = labelGap.toIntOrNull() ?: 2,
-                        appLanguage = lang
+                        activeTemplateId = selectedTemplateId
                     )
-                    val samplePayload = PrintPayload(
-                        title = "TES CETAK",
-                        code = "RMMS-14022",
-                        description = "Status: Terhubung",
-                        qty = "100"
+                    val sampleData = mapOf(
+                        "title" to "SELF TEST",
+                        "code" to "ABC-123",
+                        "description" to "LOREM IPSUM",
+                        "qty" to "100",
+                        "lokasi" to "XY-0101",
+                        "nama_barang" to "DOLOR SIT AMET",
+                        "batch" to "Z-001",
+                        "kode_barcode" to "123456789",
                     )
                     scope.launch {
-                        val res = printEngine.printData(testConfig, samplePayload)
-                        res.onSuccess {
-                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
-                        }.onFailure {
-                            Toast.makeText(context, it.message, Toast.LENGTH_LONG).show()
-                        }
+                        val res = printEngine.printDynamicData(testProfile, currentTemplate, sampleData)
+                        res.onSuccess { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
                     }
                 },
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (isId) "Uji Cetak (Test Print)" else "Test Print")
+                Text(if (isId) "Uji Cetak" else "Test Print")
             }
         }
     }
@@ -255,20 +449,17 @@ fun ConfigScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintE
             onDismissRequest = { showDeviceDialog = false },
             title = { Text(if (isId) "Pilih Printer Bluetooth" else "Select Bluetooth Printer") },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     if (pairedDevices.isEmpty()) {
-                        Text(
-                            if (isId) "Tidak ada perangkat Bluetooth yang terhubung. Silakan pair printer di menu Bluetooth Tablet terlebih dahulu."
-                            else "No paired Bluetooth devices found. Please pair your printer in Android Bluetooth settings first."
-                        )
+                        Text("Tidak ada perangkat Bluetooth yang di-pair di device ini.")
                     } else {
                         pairedDevices.forEach { device ->
                             ListItem(
-                                headlineContent = { Text(device.name ?: "Unknown Device") },
+                                headlineContent = { Text(device.name ?: "Unknown") },
                                 supportingContent = { Text(device.address) },
                                 modifier = Modifier.clickable {
-                                    selectedName = device.name ?: "Generic Printer"
-                                    selectedMac = device.address
+                                    printerName = device.name ?: "Printer"
+                                    printerMac = device.address
                                     showDeviceDialog = false
                                 }
                             )
@@ -277,10 +468,151 @@ fun ConfigScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintE
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showDeviceDialog = false }) {
-                    Text(if (isId) "Tutup" else "Close" )
-                }
+                TextButton(onClick = { showDeviceDialog = false }) { Text("Tututp") }
             }
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TemplateBuilderTab(
+    state: AppStateData,
+    configManager: PrinterConfigManager,
+    isId: Boolean
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var selectedTplId by remember { mutableStateOf(state.templates.first().id) }
+    val currentTpl = state.templates.find { it.id == selectedTplId } ?: state.templates.first()
+
+    var tplName by remember(currentTpl) { mutableStateOf(currentTpl.name) }
+    var tplBody by remember(currentTpl) { mutableStateOf(currentTpl.bodyPattern) }
+    var showDropdown by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = if (isId) "Kelola Template Kertas" else "Manage Paper Template",
+            fontWeight = FontWeight.Bold
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ExposedDropdownMenuBox(
+                expanded = showDropdown,
+                onExpandedChange = { showDropdown = !showDropdown },
+                modifier = Modifier.weight(1f)
+            ) {
+                OutlinedTextField(
+                    value = currentTpl.name,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showDropdown) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = showDropdown,
+                    onDismissRequest = { showDropdown = false }
+                ) {
+                    state.templates.forEach { tpl ->
+                        DropdownMenuItem(
+                            text = { Text(tpl.name) },
+                            onClick = {
+                                selectedTplId = tpl.id
+                                showDropdown = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            FilledTonalButton(onClick = {
+                val newTpl = LabelTemplate(
+                    id = UUID.randomUUID().toString(),
+                    name = "Template Baru ${state.templates.size + 1}",
+                    bodyPattern = "[C][B]{judul}\\n[LINE]\\nItem: {nama}\\n[C][BARCODE]{kode}"
+                )
+                scope.launch {
+                    configManager.saveState(state.copy(templates = state.templates + newTpl))
+                    selectedTplId = newTpl.id
+                }
+            }) {
+                Text("+ Baru")
+            }
+
+            if (state.templates.size > 1) {
+                TextButton(onClick = {
+                    val remaining = state.templates.filterNot { it.id == currentTpl.id }
+                    scope.launch {
+                        configManager.saveState(state.copy(templates = remaining))
+                        selectedTplId = remaining.first().id
+                    }
+                }) {
+                    Text("Hapus", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+
+        OutlinedTextField(
+            value = tplName,
+            onValueChange = { tplName = it },
+            label = { Text(if (isId) "Nama Template" else "Template Name") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = if (isId) "Panduan Pembuatan Template:" else "Template Creation Guide:",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text("• Gunakan {nama_kolom} sesuai nama field JSON dari Power Apps", style = MaterialTheme.typography.bodySmall)
+                Text("• [C] di awal baris adalah rata tengah", style = MaterialTheme.typography.bodySmall)
+                Text("• [B] di awal baris adalah huruf tebal", style = MaterialTheme.typography.bodySmall)
+                Text("• [LINE] adalah garis pemisah horizontal", style = MaterialTheme.typography.bodySmall)
+                Text("• [BARCODE]{kode} adalah untuk mencetak gambar Barcode 128", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AssistChip(onClick = { tplBody += "\n[C][B]{judul}" }, label = { Text("+ Judul") })
+            AssistChip(onClick = { tplBody += "\n[LINE]" }, label = { Text("+ Garis") })
+            AssistChip(onClick = { tplBody += "\n[C][BARCODE]{kode}" }, label = { Text("+ Barcode") })
+        }
+
+        OutlinedTextField(
+            value = tplBody,
+            onValueChange = { tplBody = it },
+            label = { Text(if (isId) "Susunan Isi Label (Per Baris)" else "Label Layout Pattern") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp),
+            maxLines = 12
+        )
+
+        Button(
+            onClick = {
+                val updatedTpl = currentTpl.copy(name = tplName, bodyPattern = tplBody)
+                val updatedList = state.templates.map { if (it.id == updatedTpl.id) updatedTpl else it }
+                scope.launch {
+                    configManager.saveState(state.copy(templates = updatedList))
+                    Toast.makeText(context, "Template '${tplName}' berhasil disimpan!", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (isId) "Simpan Desain Template" else "Save Template Design")
+        }
     }
 }

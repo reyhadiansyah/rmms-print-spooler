@@ -3,53 +3,74 @@ package com.rmms.printspooler
 import android.content.Context
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.google.gson.Gson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 val Context.dataStore by preferencesDataStore(name = "printer_settings")
 
-data class PrinterConfig(
+data class PrinterProfile(
+    val id: String = UUID.randomUUID().toString(),
+    val profileName: String = "Default",
     val printerName: String = "Belum dipilih",
     val printerMac: String = "",
-    val paperType: String = "LABEL_TSPL",
-    val paperWidthMm: Int = 72,
+    val printMode: String = "ESCPOS_RECEIPT",
+    val paperWidthMm: Int = 58,
     val labelHeightMm: Int = 40,
     val labelGapMm: Int = 2,
-    val appLanguage: String = "id"
+    val activeTemplateId: String = "default_tpl"
+)
+
+data class LabelTemplate(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "Template Standar",
+    val bodyPattern: String = "[C][B]{title}\\n[LINE]\\nKode : {code}\\nKet  : {description}\\nQty  : {qty}\\n[C][BARCODE]{code}"
+)
+
+data class AppStateData(
+    val language: String = "id",
+    val activeProfileId: String = "default_prof",
+    val profiles: List<PrinterProfile> = listOf(
+        PrinterProfile(id = "default_prof", profileName = "Profil Standar")
+    ),
+    val templates: List<LabelTemplate> = listOf(
+        LabelTemplate(
+            id = "default_tpl",
+            name = "Label Barang Standar",
+            bodyPattern = "[C][B]{title}\\n[LINE]\\nKode : {code}\\nKet  : {description}\\nQty  : {qty}\\n[C][BARCODE]{code}"
+        ),
+        LabelTemplate(
+            id = "gudang_tpl",
+            name = "Label Lokasi Rak",
+            bodyPattern = "[B]LOKASI: {lokasi}\\n[LINE]\\nItem : {nama_barang}\\nBatch: {batch}\\n[C][BARCODE]{kode_barcode}"
+        )
+    )
 )
 
 class PrinterConfigManager(private val context: Context) {
+    private val gson = Gson()
+
     companion object {
-        val PRINTER_NAME = stringPreferencesKey("printer_name")
-        val PRINTER_MAC = stringPreferencesKey("printer_mac")
-        val PAPER_TYPE = stringPreferencesKey("paper_type")
-        val PAPER_WIDTH = intPreferencesKey("paper_width")
-        val LABEL_HEIGHT = intPreferencesKey("label_height")
-        val LABEL_GAP = intPreferencesKey("label_gap")
-        val APP_LANGUAGE = stringPreferencesKey("app_language")
+        val APP_STATE_JSON = stringPreferencesKey("app_state_json")
     }
 
-    val configFlow: Flow<PrinterConfig> = context.dataStore.data.map { prefs ->
-        PrinterConfig(
-            printerName = prefs[PRINTER_NAME] ?: "Belum dipilih",
-            printerMac = prefs[PRINTER_MAC] ?: "",
-            paperType = prefs[PAPER_TYPE] ?: "LABEL_TSPL",
-            paperWidthMm = prefs[PAPER_WIDTH] ?: 72,
-            labelHeightMm = prefs[LABEL_HEIGHT] ?: 40,
-            labelGapMm = prefs[LABEL_GAP] ?: 2,
-            appLanguage = prefs[APP_LANGUAGE] ?: "id"
-        )
+    val stateFlow: Flow<AppStateData> = context.dataStore.data.map { prefs ->
+        val json = prefs[APP_STATE_JSON]
+        if (json.isNullOrEmpty()) {
+            AppStateData()
+        } else {
+            try {
+                gson.fromJson(json, AppStateData::class.java)
+            } catch (e: Exception) {
+                AppStateData()
+            }
+        }
     }
 
-    suspend fun saveConfig(config: PrinterConfig) {
+    suspend fun saveState(state: AppStateData) {
         context.dataStore.edit { prefs ->
-            prefs[PRINTER_NAME] = config.printerName
-            prefs[PRINTER_MAC] = config.printerMac
-            prefs[PAPER_TYPE] = config.paperType
-            prefs[PAPER_WIDTH] = config.paperWidthMm
-            prefs[LABEL_HEIGHT] = config.labelHeightMm
-            prefs[LABEL_GAP] = config.labelGapMm
-            prefs[APP_LANGUAGE] = config.appLanguage
+            prefs[APP_STATE_JSON] = gson.toJson(state)
         }
     }
 }

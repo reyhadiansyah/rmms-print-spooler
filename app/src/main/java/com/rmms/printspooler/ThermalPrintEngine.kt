@@ -7,16 +7,10 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.nio.charset.Charset
 import java.util.UUID
-
-data class PrintPayload(
-    val title: String = "",
-    val code: String = "",
-    val description: String = "",
-    val qty: String = "1"
-)
 
 class ThermalPrintEngine(private val context: Context) {
     private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
@@ -30,85 +24,175 @@ class ThermalPrintEngine(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun printData(config: PrinterConfig, payload: PrintPayload): Result<String> = withContext(Dispatchers.IO) {
-        if (config.printerMac.isEmpty()) {
-            return@withContext Result.failure(Exception("Printer belum dipilih di pengaturan aplikasi."))
+    suspend fun printDynamicData(
+        profile: PrinterProfile,
+        template: LabelTemplate,
+        payloadMap: Map<String, Any>
+    ): Result<String> = withContext(Dispatchers.IO) {
+        if (profile.printerMac.isEmpty()) {
+            return@withContext Result.failure(Exception("Printer belum dipilih pada profil '${profile.profileName}'."))
         }
 
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = bluetoothManager.adapter
-            ?: return@withContext Result.failure(Exception("Bluetooth tidak didukung pada perangkat ini."))
+            ?: return@withContext Result.failure(Exception("Bluetooth tidak tersedia."))
 
         if (!adapter.isEnabled) {
-            return@withContext Result.failure(Exception("Bluetooth tablet sedang mati. Mohon nyalakan Bluetooth."))
+            return@withContext Result.failure(Exception("Bluetooth device sedang mati."))
         }
 
-        val device = adapter.getRemoteDevice(config.printerMac)
-        var socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+        val device = adapter.getRemoteDevice(profile.printerMac)
+        val socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
 
         try {
             adapter.cancelDiscovery()
             socket.connect()
             val outputStream: OutputStream = socket.outputStream
 
-            val commandBytes = if (config.paperType == "LABEL_TSPL") {
-                buildTsplLabelCommand(config, payload)
-            } else {
-                buildEscPosReceiptCommand(config, payload)
+            val resolvedLines = resolveTemplateLines(template.bodyPattern, payloadMap)
+
+            val commandBytes = when (profile.printMode) {
+                "TSPL_LABEL" -> buildTsplFromTemplate(profile, resolvedLines)
+                else -> buildEscPosFromTemplate(profile, resolvedLines)
             }
 
             outputStream.write(commandBytes)
             outputStream.flush()
-
-            Thread.sleep(500)
+            Thread.sleep(600)
             socket.close()
 
-            Result.success("Cetak berhasil dikirim ke ${config.printerName}")
+            Result.success("Cetak berhasil (${profile.profileName})")
         } catch (e: Exception) {
             try { socket.close() } catch (_: Exception) {}
 
-            Result.failure(Exception("Gagal terhubung ke printer ${config.printerName}: ${e.message}"))
+            Result.failure(Exception("Gagal mencetak ke ${profile.printerName}: ${e.message}"))
         }
     }
 
-    private fun buildTsplLabelCommand(config: PrinterConfig, payload: PrintPayload): ByteArray {
+    private fun resolveTemplateLines(pattern: String, data: Map<String, Any>): List<String> {
+        var result = pattern
+        for ((key, value) in data) {
+            val strVal = if (value is Double && value % 1.0 == 0.0) {
+                value.toLong().toString()
+            } else {
+                value.toString()
+            }
+
+            result = result.replace("{$key}", strVal, ignoreCase = true)
+        }
+
+        result = result.replace(Regex("\\{[a-zA-Z0-9_]+\\}"), "-")
+
+        return result.split("\n")
+    }
+
+    private fun buildEscPosFromTemplate(profile: PrinterProfile, lines: List<String>): ByteArray {
+        val out = ByteArrayOutputStream()
+        val charLimit = if (profile.paperWidthMm >= 72) 48 else 32
+        val separator = "-".repeat(charLimit)
+
+        out.write(byteArrayOf(0x1B, 0x40))
+
+        for (rawLine in lines) {
+            var line = rawLine.trimEnd()
+            val isCenter = line.contains("[C]")
+            val isBold = line.contains("[B]")
+            val isBarcode = line.contains("[BARCODE]")
+            val isLine = line.contains("[LINE]")
+
+            line = line.replace("[C]", "")
+                .replace("[B]", "")
+                .replace("[BARCODE]", "")
+                .replace("[LINE]", "")
+                .trim()
+
+            if (isCenter) {
+                out.write(byteArrayOf(0x1B, 0x61, 0x01))
+            } else {
+                out.write(byteArrayOf(0x1B, 0x61, 0x00))
+            }
+
+            if (isLine) {
+                out.write("$separator\n".toByteArray(Charset.forName("GBK")))
+                continue
+            }
+
+            if (isBarcode && line.isNotEmpty() && line != "-") {
+                out.write(byteArrayOf(0x1D, 0x48, 0x02))
+                out.write(byteArrayOf(0x1D, 0x68, 60))
+                out.write(byteArrayOf(0x1D, 0x77, 0x02))
+
+                val codeBytes = "{B$line".toByteArray(Charsets.US_ASCII)
+                out.write(byteArrayOf(0x1D, 0x6B, 73, codeBytes.size.toByte()))
+                out.write(codeBytes)
+                out.write(byteArrayOf(0x0A))
+                continue
+            }
+
+            if (isBold) {
+                out.write(byteArrayOf(0x1B, 0x45, 0x01))
+                out.write(byteArrayOf(0x1D, 0x21, 0x01))
+            }
+
+            out.write("$line\n".toByteArray(Charset.forName("UTF-8")))
+
+            if (isBold) {
+                out.write(byteArrayOf(0x1B, 0x45, 0x00))
+                out.write(byteArrayOf(0x1d, 0x21, 0x00))
+            }
+        }
+
+        if (profile.printMode == "ESCPOS_LABEL") {
+            out.write(byteArrayOf(0x0A, 0x0A, 0x0A))
+        } else {
+            out.write(byteArrayOf(0x0A, 0x0A, 0x0A, 0x0A))
+        }
+
+        return out.toByteArray()
+    }
+
+    private fun buildTsplFromTemplate(profile: PrinterProfile, lines: List<String>): ByteArray {
         val tspl = StringBuilder()
-        tspl.append("SIZE ${config.paperWidthMm} mm, ${config.labelHeightMm} mm\r\n")
-        tspl.append("GAP ${config.labelGapMm} mm, 0 mm\r\n")
+        tspl.append("SIZE ${profile.paperWidthMm} mm, ${profile.labelHeightMm} mm\r\n")
+        tspl.append("GAP ${profile.labelGapMm} mm, 0 mm\r\n")
         tspl.append("DIRECTION 1\r\n")
         tspl.append("CLS\r\n")
-        tspl.append("TEXT 24,24,\"3\",0,1,1,\"${payload.title}\"\r\n")
-        tspl.append("TEXT 24,64,\"2\",0,1,1,\"${payload.description} (Qty: ${payload.qty})\"\r\n")
-        if (payload.code.isNotEmpty()) {
-            tspl.append("BARCODE 24,104,\"128\",60,1,0,2,2,\"${payload.code}\"\r\n")
+
+        var currentY = 20
+        val widthDots = profile.paperWidthMm * 8
+
+        for (rawLine in lines) {
+            var line = rawLine.trimEnd()
+            val isBold = line.contains("[B}")
+            val isBarcode = line.contains("[BARCODE]")
+            val isLine = line.contains("[LINE]")
+
+            line = line.replace("[C]", "")
+                .replace("[B]", "")
+                .replace("[BARCODE]", "")
+                .replace("[LINE]", "")
+                .replace("\"", "'")
+                .trim()
+
+            if (isLine) {
+                tspl.append("BAR 20,$currentY,${widthDots - 40},3\r\n")
+                currentY += 16
+                continue
+            }
+
+            if (isBarcode && line.isNotEmpty() && line != "-") {
+                tspl.append("BARCODE 24,$currentY,\"128\",56,1,0,2,2,\"$line\"\r\n")
+                currentY += 85
+                continue
+            }
+
+            val font = if (isBold) "3" else "2"
+            tspl.append("TEXT 24,$currentY,\"$font\",0,1,1,\"$line\"\r\n")
+            currentY += if (isBold) 34 else 26
         }
+
         tspl.append("PRINT 1,1\r\n")
 
         return tspl.toString().toByteArray(Charset.forName("UTF-8"))
-    }
-
-    private fun buildEscPosReceiptCommand(config: PrinterConfig, payload: PrintPayload): ByteArray {
-        val escInit = byteArrayOf(0x1B, 0x40)
-        val alignCenter = byteArrayOf(0x1B, 0x61, 0x01)
-        val alignLeft = byteArrayOf(0x1B, 0x61, 0x00)
-        val boldOn = byteArrayOf(0x1B, 0x45, 0x01)
-        val boldOff = byteArrayOf(0x1B, 0x45, 0x00)
-        val lineFeed = byteArrayOf(0x0A, 0x0A, 0x0A)
-
-        val separator = if (config.paperWidthMm >= 72) "-".repeat(48) else "-".repeat(32)
-
-        val textBuilder = StringBuilder()
-        textBuilder.append("${payload.title}\n")
-        textBuilder.append("$separator\n")
-        textBuilder.append("Kode : ${payload.code}\n")
-        textBuilder.append("Ket  : ${payload.description}\n")
-        textBuilder.append("Qty  : ${payload.qty}\n")
-        textBuilder.append("$separator\n")
-
-        return escInit + alignCenter + boldOn +
-                "${payload.title}\n".toByteArray() +
-                boldOff + alignLeft +
-                "$separator\nKode : ${payload.code}\nKet  : ${payload.description}\nQty  : ${payload.qty}\n$separator\n".toByteArray() +
-                lineFeed
     }
 }
