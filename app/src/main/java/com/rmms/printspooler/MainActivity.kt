@@ -34,7 +34,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .systemBarsPadding()
+                        .imePadding()
+                ) {
                     MainScreen(configManager, printEngine)
                 }
             }
@@ -89,10 +94,12 @@ fun MainScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintEng
             )
         }
 
-        if (selectedTab == 0) {
-            ProfileConfigTab(state, configManager, printEngine, isId)
-        } else {
-            TemplateBuilderTab(state, configManager, isId)
+        Box(modifier = Modifier.weight(1f)) {
+            if (selectedTab == 0) {
+                ProfileConfigTab(state, configManager, printEngine, isId)
+            } else {
+                TemplateBuilderTab(state, configManager, isId)
+            }
         }
     }
 }
@@ -128,7 +135,12 @@ fun ProfileConfigTab(
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
-        if (perms.values.all { it }) {
+        val btGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms[Manifest.permission.BLUETOOTH_CONNECT] == true
+        } else {
+            perms[Manifest.permission.BLUETOOTH] == true
+        }
+        if (btGranted) {
             pairedDevices = printEngine.getPairedPrinters()
             showDeviceDialog = true
         } else {
@@ -139,11 +151,10 @@ fun ProfileConfigTab(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-
         // Header
         Text(
             text = if (isId) "Pilih Profil Konfigurasi Aktif" else "Select Active Configuration Profile",
@@ -222,6 +233,7 @@ fun ProfileConfigTab(
             value = profileName,
             onValueChange = { profileName = it },
             label = { Text(if (isId) "Nama Profil" else "Profile Name") },
+            singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -248,13 +260,19 @@ fun ProfileConfigTab(
                     )
                 }
                 Button(onClick = {
-                    val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+                    val perms = mutableListOf<String>()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+                        perms.add(Manifest.permission.BLUETOOTH_SCAN)
                     } else {
-                        arrayOf(Manifest.permission.BLUETOOTH, Manifest.permission.ACCESS_FINE_LOCATION)
+                        perms.add(Manifest.permission.BLUETOOTH)
+                        perms.add(Manifest.permission.ACCESS_FINE_LOCATION)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        perms.add(Manifest.permission.POST_NOTIFICATIONS)
                     }
 
-                    permissionLauncher.launch(perms)
+                    permissionLauncher.launch(perms.toTypedArray())
                 }) {
                     Text(if (isId) "Pilih Printer" else "Select Printer")
                 }
@@ -266,7 +284,7 @@ fun ProfileConfigTab(
             text = if (isId) "2. Mode Bahasa & Jenis Kertas" else "2. Printer Language & Paper Mode",
             fontWeight = FontWeight.SemiBold
         )
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -323,6 +341,7 @@ fun ProfileConfigTab(
                 onValueChange = { paperWidth = it },
                 label = { Text(if (isId) "Lebar (mm)" else "Width (mm)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
                 modifier = Modifier.weight(1f)
             )
             if (printMode == "TSPL_LABEL") {
@@ -331,6 +350,7 @@ fun ProfileConfigTab(
                     onValueChange = { labelHeight = it },
                     label = { Text(if (isId) "Tinggi (mm)" else "Height (mm)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
                 OutlinedTextField(
@@ -338,6 +358,7 @@ fun ProfileConfigTab(
                     onValueChange = { labelGap = it },
                     label = { Text(if (isId) "Gap (mm)" else "Gap (mm)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -377,7 +398,7 @@ fun ProfileConfigTab(
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Simpan & Test Print
         Row(
@@ -483,6 +504,7 @@ fun TemplateBuilderTab(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
 
     var selectedTplId by remember { mutableStateOf(state.templates.first().id) }
     val currentTpl = state.templates.find { it.id == selectedTplId } ?: state.templates.first()
@@ -494,8 +516,8 @@ fun TemplateBuilderTab(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(scrollState)
+            .padding(horizontal = 16.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
@@ -567,6 +589,7 @@ fun TemplateBuilderTab(
             value = tplName,
             onValueChange = { tplName = it },
             label = { Text(if (isId) "Nama Template" else "Template Name") },
+            singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -597,8 +620,7 @@ fun TemplateBuilderTab(
             label = { Text(if (isId) "Susunan Isi Label (Per Baris)" else "Label Layout Pattern") },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp),
-            maxLines = 12
+                .heightIn(min = 180.dp, max = 320.dp)
         )
 
         Button(

@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
@@ -41,41 +42,47 @@ class ThermalPrintEngine(private val context: Context) {
             return@withContext Result.failure(Exception("Bluetooth device sedang mati."))
         }
 
-        val device = adapter.getRemoteDevice(profile.printerMac)
-        val socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
-
-        try {
-            adapter.cancelDiscovery()
-            socket.connect()
-            val outputStream: OutputStream = socket.outputStream
-
-            val resolvedLines = resolveTemplateLines(template.bodyPattern, payloadMap)
-
-            val commandBytes = when (profile.printMode) {
-                "TSPL_LABEL" -> buildTsplFromTemplate(profile, resolvedLines)
-                else -> buildEscPosFromTemplate(profile, resolvedLines)
-            }
-
-            outputStream.write(commandBytes)
-            outputStream.flush()
-            Thread.sleep(600)
-            socket.close()
-
-            Result.success("Cetak berhasil (${profile.profileName})")
-        } catch (e: Exception) {
-            try { socket.close() } catch (_: Exception) {}
-
-            Result.failure(Exception("Gagal mencetak ke ${profile.printerName}: ${e.message}"))
+        val resolvedLines = resolveTemplateLines(template.bodyPattern, payloadMap)
+        val commandBytes = when (profile.printMode) {
+            "TSPL_LABEL" -> buildTsplFromTemplate(profile, resolvedLines)
+            else -> buildEscPosFromTemplate(profile, resolvedLines)
         }
+
+        val device = adapter.getRemoteDevice(profile.printerMac)
+        var lastError: Exception? = null
+
+        for (attempt in 1..2) {
+            val socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+            try {
+                adapter.cancelDiscovery()
+                socket.connect()
+
+                val outputStream: OutputStream = socket.outputStream
+                outputStream.write(commandBytes)
+                outputStream.flush()
+                delay(600)
+                socket.close()
+
+                return@withContext Result.success("Cetak berhasil (${profile.profileName})")
+            } catch (e: Exception) {
+                lastError = e
+                try { socket.close() } catch (_: Exception) {}
+                if (attempt == 1) {
+                    delay(600)
+                }
+            }
+        }
+
+        Result.failure(Exception("Gagal terhubung ke ${profile.printerName}: ${lastError?.message}"))
     }
 
     private fun resolveTemplateLines(pattern: String, data: Map<String, Any>): List<String> {
-        var result = pattern
+        var result = pattern.replace("\\n", "\n").replace("\r\n", "\n")
         for ((key, value) in data) {
             val strVal = if (value is Double && value % 1.0 == 0.0) {
                 value.toLong().toString()
             } else {
-                value.toString()
+                value.toString().replace("\\n", "\n")
             }
 
             result = result.replace("{$key}", strVal, ignoreCase = true)
@@ -86,10 +93,48 @@ class ThermalPrintEngine(private val context: Context) {
         return result.split("\n")
     }
 
+    private fun wrapTextToWidth(text: String, maxCharsPerLine: Int): List<String> {
+        if (text.length <= maxCharsPerLine || maxCharsPerLine <= 4) {
+            return listOf(text)
+        }
+
+        val wrappedLines = mutableListOf<String>()
+        val words = text.split(" ")
+        var currentLine = StringBuilder()
+
+        for (word in words) {
+            if (word.length > maxCharsPerLine) {
+                if (currentLine.isNotEmpty()) {
+                    wrappedLines.add(currentLine.toString())
+                    currentLine = StringBuilder()
+                }
+                var start = 0
+                while (start < word.length) {
+                    val end = (start + maxCharsPerLine).coerceAtMost(word.length)
+                    wrappedLines.add(word.substring(start, end))
+                    start = end
+                }
+            } else if (currentLine.isEmpty()) {
+                currentLine.append(word)
+            } else if (currentLine.length + 1 + word.length <= maxCharsPerLine) {
+                currentLine.append(" ").append(word)
+            } else {
+                wrappedLines.add(currentLine.toString())
+                currentLine = StringBuilder(word)
+            }
+        }
+
+        if (currentLine.isNotEmpty()) {
+            wrappedLines.add(currentLine.toString())
+        }
+
+        return wrappedLines
+    }
+
     private fun buildEscPosFromTemplate(profile: PrinterProfile, lines: List<String>): ByteArray {
         val out = ByteArrayOutputStream()
-        val charLimit = if (profile.paperWidthMm >= 72) 48 else 32
-        val separator = "-".repeat(charLimit)
+        val baseCharLimit = if (profile.paperWidthMm >= 72) 48 else 32
+        val separator = "-".repeat(baseCharLimit)
 
         out.write(byteArrayOf(0x1B, 0x40))
 
@@ -134,7 +179,10 @@ class ThermalPrintEngine(private val context: Context) {
                 out.write(byteArrayOf(0x1D, 0x21, 0x01))
             }
 
-            out.write("$line\n".toByteArray(Charset.forName("UTF-8")))
+            val wrappedSubLines = wrapTextToWidth(line, baseCharLimit)
+            for (subLine in wrappedSubLines) {
+                out.write("$subLine\n".toByteArray(Charset.forName("UTF-8")))
+            }
 
             if (isBold) {
                 out.write(byteArrayOf(0x1B, 0x45, 0x00))
@@ -142,11 +190,7 @@ class ThermalPrintEngine(private val context: Context) {
             }
         }
 
-        if (profile.printMode == "ESCPOS_LABEL") {
-            out.write(byteArrayOf(0x0A, 0x0A, 0x0A))
-        } else {
-            out.write(byteArrayOf(0x0A, 0x0A, 0x0A, 0x0A))
-        }
+        out.write(byteArrayOf(0x0A, 0x0A, 0x0A))
 
         return out.toByteArray()
     }
@@ -160,9 +204,11 @@ class ThermalPrintEngine(private val context: Context) {
 
         var currentY = 20
         val widthDots = profile.paperWidthMm * 8
+        val usableWidthDots = (widthDots - 48).coerceAtLeast(160)
 
         for (rawLine in lines) {
             var line = rawLine.trimEnd()
+            val isCenter = line.contains("[C]")
             val isBold = line.contains("[B}")
             val isBarcode = line.contains("[BARCODE]")
             val isLine = line.contains("[LINE]")
@@ -175,7 +221,7 @@ class ThermalPrintEngine(private val context: Context) {
                 .trim()
 
             if (isLine) {
-                tspl.append("BAR 20,$currentY,${widthDots - 40},3\r\n")
+                tspl.append("BAR 24,$currentY,$usableWidthDots,3\r\n")
                 currentY += 16
                 continue
             }
@@ -187,8 +233,21 @@ class ThermalPrintEngine(private val context: Context) {
             }
 
             val font = if (isBold) "3" else "2"
-            tspl.append("TEXT 24,$currentY,\"$font\",0,1,1,\"$line\"\r\n")
-            currentY += if (isBold) 34 else 26
+            val charWidthDots = if (isBold) 16 else 12
+            val maxChars = (usableWidthDots / charWidthDots).coerceAtLeast(10)
+
+            val wrappedSubLines = wrapTextToWidth(line, maxChars)
+            for (subLine in wrappedSubLines) {
+                val startX = if (isCenter) {
+                    val textWidth = subLine.length * charWidthDots
+                    ((widthDots - textWidth) / 2).coerceAtLeast(24)
+                } else {
+                    24
+                }
+
+                tspl.append("TEXT $startX,$currentY,\"$font\",0,1,1,\"$subLine\"\r\n")
+                currentY += if (isBold) 32 else 24
+            }
         }
 
         tspl.append("PRINT 1,1\r\n")
