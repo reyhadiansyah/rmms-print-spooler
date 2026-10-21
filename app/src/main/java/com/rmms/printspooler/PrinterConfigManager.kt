@@ -10,40 +10,91 @@ import java.util.UUID
 
 val Context.dataStore by preferencesDataStore(name = "printer_settings")
 
+data class PaperSizeProfile(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "Kertas Baru",
+    val widthMm: Int = 70,
+    val heightMm: Int = 50,
+    val gapMm: Int = 2,
+    val marginMm: Int = 3,
+    val customMaxChars: Int = 0
+)
+
 data class PrinterProfile(
     val id: String = UUID.randomUUID().toString(),
-    val profileName: String = "Default",
+    val profileName: String = "Profil Baru",
     val printerName: String = "Belum dipilih",
     val printerMac: String = "",
-    val printMode: String = "ESCPOS_RECEIPT",
-    val paperWidthMm: Int = 58,
-    val labelHeightMm: Int = 40,
+    val printMode: String = "TSPL_LABEL",
+    val activePaperProfileId: String = "paper_70x50",
+    val paperWidthMm: Int = 70,
+    val labelHeightMm: Int = 50,
     val labelGapMm: Int = 2,
-    val activeTemplateId: String = "default_tpl"
+    val marginMm: Int = 3,
+    val customMaxChars: Int = 0,
+    val activeTemplateId: String = ""
 )
 
 data class LabelTemplate(
     val id: String = UUID.randomUUID().toString(),
-    val name: String = "Template Standar",
-    val bodyPattern: String = "[C][B]{title}\\n[LINE]\\nKode : {code}\\nKet  : {description}\\nQty  : {qty}\\n[C][BARCODE]{code}"
+    val name: String = "Template Baru",
+    val bodyPattern: String = ""
 )
 
 data class AppStateData(
     val language: String = "id",
+    val appTitle: String = "RMMS Print Spooler",
+    val creatorDivision: String = "reyhadiansyah",
     val activeProfileId: String = "default_prof",
+    val paperProfiles: List<PaperSizeProfile> = listOf(
+        PaperSizeProfile(
+            id = "paper_70x50",
+            name = "Label 70x50mm (Gap 2mm)",
+            widthMm = 70,
+            heightMm = 50,
+            gapMm = 2,
+            marginMm = 3
+        ),
+        PaperSizeProfile(
+            id = "paper_50x30",
+            name = "Label 50x30mm (Gap 2mm)",
+            widthMm = 50,
+            heightMm = 30,
+            gapMm = 2,
+            marginMm = 2
+        ),
+        PaperSizeProfile(
+            id = "paper_58_roll",
+            name = "Continuous 58mm",
+            widthMm = 58,
+            heightMm = 40,
+            gapMm = 0,
+            marginMm = 3
+        ),
+        PaperSizeProfile(
+            id = "paper_80_roll",
+            name = "Continuous 80mm",
+            widthMm = 80,
+            heightMm = 50,
+            gapMm = 0,
+            marginMm = 4
+        )
+    ),
     val profiles: List<PrinterProfile> = listOf(
-        PrinterProfile(id = "default_prof", profileName = "Profil Standar")
+        PrinterProfile(
+            id = "default_prof",
+            profileName = "Profil Bawaan",
+            activePaperProfileId = "paper_70x50",
+            paperWidthMm = 70,
+            labelHeightMm = 50,
+            labelGapMm = 2
+        )
     ),
     val templates: List<LabelTemplate> = listOf(
         LabelTemplate(
             id = "default_tpl",
-            name = "Label Barang Standar",
-            bodyPattern = "[C][B]{title}\\n[LINE]\\nKode : {code}\\nKet  : {description}\\nQty  : {qty}\\n[C][BARCODE]{code}"
-        ),
-        LabelTemplate(
-            id = "gudang_tpl",
-            name = "Label Lokasi Rak",
-            bodyPattern = "[B]LOKASI: {lokasi}\\n[LINE]\\nItem : {nama_barang}\\nBatch: {batch}\\n[C][BARCODE]{kode_barcode}"
+            name = "Template Bawaan",
+            bodyPattern = "Kota: {pwkl}\nMaterial: {material}\nDesc: {material_desc}\nQty: {quantity}"
         )
     )
 )
@@ -61,7 +112,12 @@ class PrinterConfigManager(private val context: Context) {
             AppStateData()
         } else {
             try {
-                gson.fromJson(json, AppStateData::class.java)
+                val parsed = gson.fromJson(json, AppStateData::class.java)
+                if (parsed.paperProfiles.isNullOrEmpty()) {
+                    parsed.copy(paperProfiles = AppStateData().paperProfiles)
+                } else {
+                    parsed
+                }
             } catch (e: Exception) {
                 AppStateData()
             }

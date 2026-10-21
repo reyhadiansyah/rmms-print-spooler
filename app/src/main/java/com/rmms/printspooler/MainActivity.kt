@@ -10,21 +10,34 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
+
+const val PATENT_APP_TITLE = "RMMS Print Spooler"
+const val PATENT_CREATOR_NAME = "General Administration Raw Material Warehouse"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,7 +53,7 @@ class MainActivity : ComponentActivity() {
                         .systemBarsPadding()
                         .imePadding()
                 ) {
-                    MainScreen(configManager, printEngine)
+                    AppRootWithSplash(configManager, printEngine)
                 }
             }
         }
@@ -48,36 +61,164 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MainScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintEngine) {
+fun AppRootWithSplash(configManager: PrinterConfigManager, printEngine: ThermalPrintEngine) {
+    val context = LocalContext.current
     val state by configManager.stateFlow.collectAsState(initial = AppStateData())
+    var showSplash by rememberSaveable { mutableStateOf(true) }
+
+    val installedVersion = remember {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName ?: "1.3.0"
+        } catch (e: Exception) {
+            "1.3.0"
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (showSplash) {
+            delay(3000)
+            showSplash = false
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (!showSplash) {
+            MainScreen(
+                state = state,
+                installedVersion = installedVersion,
+                configManager = configManager,
+                printEngine = printEngine
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showSplash,
+            enter = fadeIn(animationSpec = tween(400)),
+            exit = fadeOut(animationSpec = tween(500)),
+        ) {
+            SplashScreenView(versionName = installedVersion)
+        }
+    }
+}
+
+@Composable
+fun SplashScreenView(versionName: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .padding(28.dp)
+    ) {
+        Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Surface(
+                modifier = Modifier.size(110.dp),
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 6.dp
+            ) {
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(id = R.mipmap.ic_launcher_foreground),
+                    contentDescription = "Logo Aplikasi",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = PATENT_APP_TITLE,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                textAlign = TextAlign.Center
+            )
+
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+            ) {
+                Text(
+                    text = "Versi $versionName",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "Dikembangkan oleh:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+            )
+            Text(
+                text = PATENT_CREATOR_NAME,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+fun MainScreen(
+    state: AppStateData,
+    installedVersion: String,
+    configManager: PrinterConfigManager,
+    printEngine: ThermalPrintEngine
+) {
     val scope = rememberCoroutineScope()
     var selectedTab by remember { mutableIntStateOf(0) }
     val isId = state.language == "id"
 
+    // HEADER
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = if (isId) "Konfigurasi Printer Thermal" else "Thermal Printer Settings",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        configManager.saveState(state.copy(language = if (isId) "en" else "id"))
-                    }
-                },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(if (isId) "EN" else "ID")
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = PATENT_APP_TITLE,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "v$installedVersion",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            configManager.saveState(state.copy(language = if (isId) "en" else "id"))
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(if (isId) "EN" else "ID")
+                }
             }
         }
 
@@ -85,25 +226,31 @@ fun MainScreen(configManager: PrinterConfigManager, printEngine: ThermalPrintEng
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text(if (isId) "Profil & Koneksi" else "Profiles & Printer") }
+                text = { Text(if (isId) "Profil Cetak" else "Print Profile") }
             )
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
-                text = { Text(if (isId) "Template Label" else "Label Templates") }
+                text = { Text(if (isId) "Ukuran Kertas" else "Paper Size") }
+            )
+            Tab(
+                selected = selectedTab == 2,
+                onClick = { selectedTab = 2 },
+                text = { Text(if (isId) "Template Cetak" else "Print Template") }
             )
         }
 
         Box(modifier = Modifier.weight(1f)) {
-            if (selectedTab == 0) {
-                ProfileConfigTab(state, configManager, printEngine, isId)
-            } else {
-                TemplateBuilderTab(state, configManager, isId)
+            when (selectedTab) {
+                0 -> ProfileConfigTab(state, configManager, printEngine, isId)
+                1 -> PaperSizeProfileTab(state, configManager, isId)
+                2 -> TemplateBuilderTab(state,configManager, isId)
             }
         }
     }
 }
 
+// TAB 1: PROFIL CETAK
 @OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("MissingPermission")
 @Composable
@@ -122,12 +269,21 @@ fun ProfileConfigTab(
     var printerName by remember(activeProfile) { mutableStateOf(activeProfile.printerName) }
     var printerMac by remember(activeProfile) { mutableStateOf(activeProfile.printerMac) }
     var printMode by remember(activeProfile) { mutableStateOf(activeProfile.printMode) }
-    var paperWidth by remember(activeProfile) { mutableStateOf(activeProfile.paperWidthMm.toString()) }
-    var labelHeight by remember(activeProfile) { mutableStateOf(activeProfile.labelHeightMm.toString()) }
-    var labelGap by remember(activeProfile) { mutableStateOf(activeProfile.labelGapMm.toString()) }
+    var selectedPaperProfileId by remember(activeProfile) { mutableStateOf(activeProfile.activePaperProfileId) }
     var selectedTemplateId by remember(activeProfile) { mutableStateOf(activeProfile.activeTemplateId) }
+    var selectedPaperProfile = state.paperProfiles.find { it.id == selectedPaperProfileId }
+        ?: state.paperProfiles.first()
+
+    val autoMaxCharsNormal = ThermalPrintEngine.calculateAutoMaxChars(
+        widthMm = selectedPaperProfile.widthMm,
+        marginMm = selectedPaperProfile.marginMm,
+        printMode = printMode,
+        isBold = false,
+        customOverride = selectedPaperProfile.customMaxChars
+    )
 
     var showProfileDropdown by remember { mutableStateOf(false) }
+    var showPaperDropdown by remember { mutableStateOf(false) }
     var showTemplateDropdown by remember { mutableStateOf(false) }
     var showDeviceDialog by remember { mutableStateOf(false) }
     var pairedDevices by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
@@ -155,7 +311,6 @@ fun ProfileConfigTab(
             .padding(horizontal = 16.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Header
         Text(
             text = if (isId) "Pilih Profil Konfigurasi Aktif" else "Select Active Configuration Profile",
             fontWeight = FontWeight.Bold
@@ -196,9 +351,16 @@ fun ProfileConfigTab(
             }
 
             FilledTonalButton(onClick = {
+                val firstPaper = state.paperProfiles.first()
                 val newProf = PrinterProfile(
                     id = UUID.randomUUID().toString(),
-                    profileName = "Profil Baru ${state.profiles.size + 1}"
+                    profileName = "Profil Baru ${state.profiles.size + 1}",
+                    activePaperProfileId = firstPaper.id,
+                    paperWidthMm = firstPaper.widthMm,
+                    labelHeightMm = firstPaper.heightMm,
+                    labelGapMm = firstPaper.gapMm,
+                    marginMm = firstPaper.marginMm,
+                    customMaxChars = firstPaper.customMaxChars
                 )
                 scope.launch {
                     configManager.saveState(
@@ -213,7 +375,7 @@ fun ProfileConfigTab(
             }
 
             if (state.profiles.size > 1) {
-                TextButton(onClick =  {
+                TextButton(onClick = {
                     val remaining = state.profiles.filterNot { it.id == activeProfile.id }
                     scope.launch {
                         configManager.saveState(
@@ -239,7 +401,7 @@ fun ProfileConfigTab(
 
         HorizontalDivider()
 
-        // Opsi Pertama
+        // 1. PERANGKAT PRINTER
         Text(
             text = if (isId) "1. Perangkat Printer (Bluetooth)" else "1. Printer Device (Bluetooth)",
             fontWeight = FontWeight.SemiBold
@@ -279,12 +441,12 @@ fun ProfileConfigTab(
             }
         }
 
-        // Opsi Kedua
+        // 2. MODE MEKANISME KERTAS
         Text(
-            text = if (isId) "2. Mode Bahasa & Jenis Kertas" else "2. Printer Language & Paper Mode",
+            text = if (isId) "2. Mode Mekanisme Kertas & Bahasa Cetak" else "2. Paper Mechanism & Command Mode",
             fontWeight = FontWeight.SemiBold
         )
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -297,11 +459,11 @@ fun ProfileConfigTab(
                 )
                 Column {
                     Text(
-                        text = if (isId) "Kertas Thermal Universal" else "Universal Thermal Paper",
+                        text = if (isId) "Kertas Thermal Continuous" else "Continuous Thermal Paper",
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = if (isId) "Untuk printer dengan bahasa ESC/POS" else "For printer with ESC/POS language",
+                        text = if (isId) "Mencetak dengan bahasa ESC/POS" else "Printing with ESC/POS language",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -319,54 +481,75 @@ fun ProfileConfigTab(
                 )
                 Column {
                     Text(
-                        text = if (isId) "Kertas Thermal Label dengan Gap" else "Label Thermal Paper with Gap",
+                        text = if (isId) "Kertas Thermal dengan Gap" else "Thermal Paper with Gap",
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = if (isId) "Untuk printer dengan bahasa TSPL" else "For printer with TSPL language",
+                        text = if (isId) "Mencetak dengan bahasa TSPL. Pastikan printer mempunyai sensor gap" else "Printing with TSPL language. Ensure the printer has a gap sensor",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
             }
         }
 
-        // Opsi Ketiga
+        // 3. UKURAN KERTAS
         Text(
-            text = if (isId) "3. Dimensi Kertas (mm)" else "3. Paper Dimensions (mm)",
+            text = if (isId) "3. Ukuran Kertas" else "3. Paper Size",
             fontWeight = FontWeight.SemiBold
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        ExposedDropdownMenuBox(
+            expanded = showPaperDropdown,
+            onExpandedChange = { showPaperDropdown = !showPaperDropdown }
+        ) {
             OutlinedTextField(
-                value = paperWidth,
-                onValueChange = { paperWidth = it },
-                label = { Text(if (isId) "Lebar (mm)" else "Width (mm)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.weight(1f)
+                value = "${selectedPaperProfile.name} (${selectedPaperProfile.widthMm}x${selectedPaperProfile.heightMm}mm)",
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showPaperDropdown) },
+                modifier = Modifier.menuAnchor().fillMaxWidth()
             )
-            if (printMode == "TSPL_LABEL") {
-                OutlinedTextField(
-                    value = labelHeight,
-                    onValueChange = { labelHeight = it },
-                    label = { Text(if (isId) "Tinggi (mm)" else "Height (mm)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
+            ExposedDropdownMenu(
+                expanded = showPaperDropdown,
+                onDismissRequest = { showPaperDropdown = false }
+            ) {
+                state.paperProfiles.forEach { paper ->
+                    DropdownMenuItem(
+                        text = { Text("${paper.name} (${paper.widthMm}x${paper.heightMm}mm, Gap ${paper.gapMm}mm)") },
+                        onClick = {
+                            selectedPaperProfileId = paper.id
+                            showPaperDropdown = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = if (isId)
+                        "Maksimal karakter dalam satu baris: $autoMaxCharsNormal"
+                    else
+                        "Maximum character in one line : $autoMaxCharsNormal",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyMedium
                 )
-                OutlinedTextField(
-                    value = labelGap,
-                    onValueChange = { labelGap = it },
-                    label = { Text(if (isId) "Gap (mm)" else "Gap (mm)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
+                Text(
+                    text = if (isId)
+                        "Daftar ukuran kertas dapat ditambah atau diubah di tab 'Ukuran Kertas'."
+                    else
+                        "Paper presets can be added or modified on the 'Paper Sizes' tab.",
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
         }
 
-        // Opsi Keempat
+        // 4. TEMPLATE CETAK
         Text(
-            text = if (isId) "4. Template Label Aktif" else "4. Active Label Template",
+            text = if (isId) "4. Template Cetak" else "4. Print Template",
             fontWeight = FontWeight.SemiBold
         )
 
@@ -398,9 +581,9 @@ fun ProfileConfigTab(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-        // Simpan & Test Print
+        // SIMPAN & TES CETAK
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -412,9 +595,12 @@ fun ProfileConfigTab(
                         printerName = printerName,
                         printerMac = printerMac,
                         printMode = printMode,
-                        paperWidthMm = paperWidth.toIntOrNull() ?: 58,
-                        labelHeightMm = labelHeight.toIntOrNull() ?: 40,
-                        labelGapMm = labelGap.toIntOrNull() ?: 2,
+                        activePaperProfileId = selectedPaperProfile.id,
+                        paperWidthMm = selectedPaperProfile.widthMm,
+                        labelHeightMm = selectedPaperProfile.heightMm,
+                        labelGapMm = selectedPaperProfile.gapMm,
+                        marginMm = selectedPaperProfile.marginMm,
+                        customMaxChars = selectedPaperProfile.customMaxChars,
                         activeTemplateId = selectedTemplateId
                     )
                     val updatedList = state.profiles.map {
@@ -437,20 +623,16 @@ fun ProfileConfigTab(
                         printerName = printerName,
                         printerMac = printerMac,
                         printMode = printMode,
-                        paperWidthMm = paperWidth.toIntOrNull() ?: 58,
-                        labelHeightMm = labelHeight.toIntOrNull() ?: 40,
-                        labelGapMm = labelGap.toIntOrNull() ?: 2,
+                        activePaperProfileId = selectedPaperProfile.id,
+                        paperWidthMm = selectedPaperProfile.widthMm,
+                        labelHeightMm = selectedPaperProfile.heightMm,
+                        labelGapMm = selectedPaperProfile.gapMm,
+                        marginMm = selectedPaperProfile.marginMm,
+                        customMaxChars = selectedPaperProfile.customMaxChars,
                         activeTemplateId = selectedTemplateId
                     )
                     val sampleData = mapOf(
-                        "title" to "SELF TEST",
-                        "code" to "ABC-123",
-                        "description" to "LOREM IPSUM",
-                        "qty" to "100",
-                        "lokasi" to "XY-0101",
-                        "nama_barang" to "DOLOR SIT AMET",
-                        "batch" to "Z-001",
-                        "kode_barcode" to "123456789",
+                        "lorem" to "lorem ipsum dolor sit amet"
                     )
                     scope.launch {
                         val res = printEngine.printDynamicData(testProfile, currentTemplate, sampleData)
@@ -472,7 +654,7 @@ fun ProfileConfigTab(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     if (pairedDevices.isEmpty()) {
-                        Text("Tidak ada perangkat Bluetooth yang di-pair di device ini.")
+                        Text("Tidak ada perangkat Bluetooth yang di-pair di perangkat ini.")
                     } else {
                         pairedDevices.forEach { device ->
                             ListItem(
@@ -489,12 +671,244 @@ fun ProfileConfigTab(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showDeviceDialog = false }) { Text("Tututp") }
+                TextButton(onClick = { showDeviceDialog = false }) { Text("Tutup") }
             }
         )
     }
 }
 
+// TAB 2: UKURAN KERTAS
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PaperSizeProfileTab(
+    state: AppStateData,
+    configManager: PrinterConfigManager,
+    isId: Boolean
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var selectedPaperId by remember { mutableStateOf(state.paperProfiles.first().id) }
+    val currentPaper = state.paperProfiles.find { it.id == selectedPaperId } ?: state.paperProfiles.first()
+
+    var paperName by remember(currentPaper) { mutableStateOf(currentPaper.name) }
+    var widthStr by remember(currentPaper) { mutableStateOf(currentPaper.widthMm.toString()) }
+    var heightStr by remember(currentPaper) { mutableStateOf(currentPaper.heightMm.toString()) }
+    var gapStr by remember(currentPaper) { mutableStateOf(currentPaper.gapMm.toString()) }
+    var marginStr by remember(currentPaper) { mutableStateOf(currentPaper.marginMm.toString()) }
+    var customCharsStr by remember(currentPaper) {
+        mutableStateOf(if (currentPaper.customMaxChars > 0) currentPaper.customMaxChars.toString() else "")
+    }
+    var showDropdown by remember { mutableStateOf(false) }
+
+    val wMm = widthStr.toIntOrNull() ?: 70
+    val mMm = marginStr.toIntOrNull() ?: 3
+    val overrideChars = customCharsStr.toIntOrNull() ?: 0
+
+    val tsplNormalChars = ThermalPrintEngine.calculateAutoMaxChars(wMm, mMm, "TSPL'LABEL", false, overrideChars)
+    val tsplBoldChars = ThermalPrintEngine.calculateAutoMaxChars(wMm, mMm, "TSPL'LABEL", true, overrideChars)
+    val escPosChars = ThermalPrintEngine.calculateAutoMaxChars(wMm, mMm, "ESCPOS_LABEL", false, overrideChars)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text(
+            text = if (isId) "Kelola Profil Ukuran Kertas" else "Manage Paper Size Profiles",
+            fontWeight = FontWeight.Bold
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ExposedDropdownMenuBox(
+                expanded = showDropdown,
+                onExpandedChange = { showDropdown = !showDropdown },
+                modifier = Modifier.weight(1f)
+            ) {
+                OutlinedTextField(
+                    value = currentPaper.name,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showDropdown) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                ExposedDropdownMenu(
+                    expanded = showDropdown,
+                    onDismissRequest = { showDropdown = false }
+                ) {
+                    state.paperProfiles.forEach { p ->
+                        DropdownMenuItem(
+                            text = { Text("${p.name} (${p.widthMm}x${p.heightMm}mm") },
+                            onClick = {
+                                selectedPaperId = p.id
+                                showDropdown = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            FilledTonalButton(onClick = {
+                val newPaper = PaperSizeProfile(
+                    id = UUID.randomUUID().toString(),
+                    name = "Kertas Baru ${state.paperProfiles.size + 1}",
+                    widthMm = 60,
+                    heightMm = 40,
+                    gapMm = 2,
+                    marginMm = 3
+                )
+                scope.launch {
+                    configManager.saveState(state.copy(paperProfiles = state.paperProfiles + newPaper))
+                    selectedPaperId = newPaper.id
+                }
+            }) {
+                Text("+ Baru")
+            }
+
+            if (state.paperProfiles.size > 1) {
+                TextButton(onClick = {
+                    val remaining = state.paperProfiles.filterNot { it.id == currentPaper.id }
+                    scope.launch {
+                        configManager.saveState(state.copy(paperProfiles = remaining))
+                        selectedPaperId = remaining.first().id
+                    }
+                }) {
+                    Text(if (isId) "Hapus" else "Delete", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+
+        OutlinedTextField(
+            value = paperName,
+            onValueChange = { paperName = it },
+            label = { Text(if (isId) "Nama Profil Kertas" else "Paper Profile Name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(
+                value = widthStr,
+                onValueChange = { widthStr = it },
+                label = { Text(if (isId) "Lebar (mm)" else "Width (mm)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                value = heightStr,
+                onValueChange = { heightStr = it },
+                label = { Text(if (isId) "Tinggi (mm)" else "Height (mm)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                value = gapStr,
+                onValueChange = { gapStr = it },
+                label = { Text(if (isId) "Gap (mm)" else "Gap (mm)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(
+                value = marginStr,
+                onValueChange = { marginStr = it },
+                label = { Text(if (isId) "Margin Kiri/Kanan (mm)" else "Side Margin (mm)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            OutlinedTextField(
+                value = customCharsStr,
+                onValueChange = { customCharsStr = it },
+                label = { Text(if (isId) "Batas Karakter (Kosong = Auto)" else "Max Chars (Blank = Auto)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = if (isId) "Hasil Kalkulasi Kapasitas Karakter Kertas:" else "Calculated Character Capacity:",
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "• TSPL Huruf Normal: $tsplNormalChars karakter / baris",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "• TSPL Huruf Tebal: $tsplBoldChars karakter / baris",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "• ESC/POS: $escPosChars karakter / baris",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = if (isId)
+                        "Catatan: Biarkan kolom 'Batas Karakter' kosong agar aplikasi menghitung otomatis dari lebar kertas (mm)."
+                    else
+                        "Note: Leave 'Max Chars' blank for automatic calculation based on paper width.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Button(
+            onClick = {
+                val updatedPaper = currentPaper.copy(
+                    name = paperName,
+                    widthMm = widthStr.toIntOrNull() ?: 70,
+                    heightMm = heightStr.toIntOrNull() ?: 50,
+                    gapMm = gapStr.toIntOrNull() ?: 2,
+                    marginMm = marginStr.toIntOrNull() ?: 3,
+                    customMaxChars = customCharsStr.toIntOrNull() ?: 0
+                )
+                val updatedPaperList = state.paperProfiles.map {
+                    if (it.id == updatedPaper.id) updatedPaper else it
+                }
+                val syncedPrinterProfiles = state.profiles.map { prof ->
+                    if (prof.activePaperProfileId == updatedPaper.id) {
+                        prof.copy(
+                            paperWidthMm = updatedPaper.widthMm,
+                            labelHeightMm = updatedPaper.heightMm,
+                            labelGapMm = updatedPaper.gapMm,
+                            marginMm = updatedPaper.marginMm,
+                            customMaxChars = updatedPaper.customMaxChars
+                        )
+                    } else prof
+                }
+                scope.launch {
+                    configManager.saveState(
+                        state.copy(
+                            paperProfiles = updatedPaperList,
+                            profiles = syncedPrinterProfiles
+                        )
+                    )
+                    Toast.makeText(context, "Profil kertas '${paperName}' berhasil disimpan!", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (isId) "Simpan Profil Ukuran Kertas" else "Save Paper Size Profile")
+        }
+    }
+}
+
+// TAB 3: TEMPLATE CETAK
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TemplateBuilderTab(
@@ -517,11 +931,11 @@ fun TemplateBuilderTab(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp, vertical = 20.dp),
+            .padding(horizontal = 16.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = if (isId) "Kelola Template Kertas" else "Manage Paper Template",
+            text = if (isId) "Kelola Template Kertas" else "Manage Paper Templates",
             fontWeight = FontWeight.Bold
         )
 
@@ -562,7 +976,7 @@ fun TemplateBuilderTab(
                 val newTpl = LabelTemplate(
                     id = UUID.randomUUID().toString(),
                     name = "Template Baru ${state.templates.size + 1}",
-                    bodyPattern = "[C][B]{judul}\\n[LINE]\\nItem: {nama}\\n[C][BARCODE]{kode}"
+                    bodyPattern = ""
                 )
                 scope.launch {
                     configManager.saveState(state.copy(templates = state.templates + newTpl))
@@ -601,17 +1015,25 @@ fun TemplateBuilderTab(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text("• Gunakan {nama_kolom} sesuai nama field JSON dari Power Apps", style = MaterialTheme.typography.bodySmall)
+                Text("• Baris yang memakai titik dua otomatis disejajarkan", style = MaterialTheme.typography.bodySmall)
                 Text("• [C] di awal baris adalah rata tengah", style = MaterialTheme.typography.bodySmall)
                 Text("• [B] di awal baris adalah huruf tebal", style = MaterialTheme.typography.bodySmall)
                 Text("• [LINE] adalah garis pemisah horizontal", style = MaterialTheme.typography.bodySmall)
-                Text("• [BARCODE]{kode} adalah untuk mencetak gambar Barcode 128", style = MaterialTheme.typography.bodySmall)
+                Text("• [BARCODE]{kode} adalah untuk generate Barcode Batang", style = MaterialTheme.typography.bodySmall)
+                Text("• [QRCODE]{kode} adalah untuk generate QR Code", style = MaterialTheme.typography.bodySmall)
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             AssistChip(onClick = { tplBody += "\n[C][B]{judul}" }, label = { Text("+ Judul") })
             AssistChip(onClick = { tplBody += "\n[LINE]" }, label = { Text("+ Garis") })
             AssistChip(onClick = { tplBody += "\n[C][BARCODE]{kode}" }, label = { Text("+ Barcode") })
+            AssistChip(onClick = { tplBody += "\n[C][QRCODE]{kode}" }, label = { Text("+ QR Code") })
         }
 
         OutlinedTextField(
