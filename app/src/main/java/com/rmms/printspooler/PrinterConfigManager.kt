@@ -1,15 +1,19 @@
 package com.rmms.printspooler
 
 import android.content.Context
+import androidx.annotation.Keep
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 import java.util.UUID
 
 val Context.dataStore by preferencesDataStore(name = "printer_settings")
 
+@Keep
 data class PaperSizeProfile(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "Kertas Baru",
@@ -20,6 +24,7 @@ data class PaperSizeProfile(
     val customMaxChars: Int = 0
 )
 
+@Keep
 data class PrinterProfile(
     val id: String = UUID.randomUUID().toString(),
     val profileName: String = "Profil Baru",
@@ -35,16 +40,16 @@ data class PrinterProfile(
     val activeTemplateId: String = ""
 )
 
+@Keep
 data class LabelTemplate(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "Template Baru",
     val bodyPattern: String = ""
 )
 
+@Keep
 data class AppStateData(
     val language: String = "id",
-    val appTitle: String = "RMMS Print Spooler",
-    val creatorDivision: String = "reyhadiansyah",
     val activeProfileId: String = "default_prof",
     val paperProfiles: List<PaperSizeProfile> = listOf(
         PaperSizeProfile(
@@ -106,22 +111,33 @@ class PrinterConfigManager(private val context: Context) {
         val APP_STATE_JSON = stringPreferencesKey("app_state_json")
     }
 
-    val stateFlow: Flow<AppStateData> = context.dataStore.data.map { prefs ->
-        val json = prefs[APP_STATE_JSON]
-        if (json.isNullOrEmpty()) {
-            AppStateData()
-        } else {
-            try {
-                val parsed = gson.fromJson(json, AppStateData::class.java)
-                if (parsed.paperProfiles.isNullOrEmpty()) {
-                    parsed.copy(paperProfiles = AppStateData().paperProfiles)
-                } else {
-                    parsed
-                }
-            } catch (e: Exception) {
-                AppStateData()
-            }
+    val stateFlow: Flow<AppStateData> = context.dataStore.data
+        .catch { e ->
+            if (e is IOException) emit(emptyPreferences()) else throw e
         }
+        .map { prefs ->
+            val json = prefs[APP_STATE_JSON]
+            val defaultState = AppStateData()
+            if (json.isNullOrEmpty()) {
+                defaultState
+            } else {
+                try {
+                    val parsed = gson.fromJson(json, AppStateData::class.java)
+                    if (parsed == null) {
+                        defaultState
+                    } else {
+                        parsed.copy(
+                            language = parsed.language ?: defaultState.language,
+                            activeProfileId = parsed.activeProfileId ?: defaultState.activeProfileId,
+                            paperProfiles = if (parsed.paperProfiles.isNullOrEmpty()) defaultState.paperProfiles else parsed.paperProfiles,
+                            profiles = if (parsed.profiles.isNullOrEmpty()) defaultState.profiles else parsed.profiles,
+                            templates = if (parsed.templates.isNullOrEmpty()) defaultState.templates else parsed.templates
+                        )
+                    }
+                } catch (e: Exception) {
+                    defaultState
+                }
+            }
     }
 
     suspend fun saveState(state: AppStateData) {

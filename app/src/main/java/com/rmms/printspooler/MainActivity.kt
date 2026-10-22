@@ -3,6 +3,8 @@ package com.rmms.printspooler
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -14,6 +16,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -27,11 +30,14 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -69,9 +75,9 @@ fun AppRootWithSplash(configManager: PrinterConfigManager, printEngine: ThermalP
     val installedVersion = remember {
         try {
             val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            pInfo.versionName ?: "1.3.0"
+            pInfo.versionName ?: "1.3.1"
         } catch (e: Exception) {
-            "1.3.0"
+            "1.3.1"
         }
     }
 
@@ -104,6 +110,23 @@ fun AppRootWithSplash(configManager: PrinterConfigManager, printEngine: ThermalP
 
 @Composable
 fun SplashScreenView(versionName: String) {
+    val context = LocalContext.current
+    val appIconBitmap = remember {
+        try {
+            val drawable = context.packageManager.getApplicationIcon(context.packageName)
+            val width = drawable.intrinsicWidth.coerceAtLeast(160)
+            val height = drawable.intrinsicHeight.coerceAtLeast(160)
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+
+            drawable.setBounds(0, 0, canvas.width, canvas.height)
+            drawable.draw(canvas)
+            bitmap.asImageBitmap()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -116,16 +139,23 @@ fun SplashScreenView(versionName: String) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Surface(
-                modifier = Modifier.size(110.dp),
+                modifier = Modifier.size(104.dp),
                 shape = RoundedCornerShape(24.dp),
-                shadowElevation = 6.dp
+                shadowElevation = 6.dp,
+                color = MaterialTheme.colorScheme.surface
             ) {
-                androidx.compose.foundation.Image(
-                    painter = androidx.compose.ui.res.painterResource(id = R.mipmap.ic_launcher_foreground),
-                    contentDescription = "Logo Aplikasi",
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (appIconBitmap != null) {
+                    Image(
+                        bitmap = appIconBitmap,
+                        contentDescription = "App Icon",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Text(text = "🖨️", fontSize = 42.sp)
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -208,17 +238,17 @@ fun MainScreen(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            configManager.saveState(state.copy(language = if (isId) "en" else "id"))
-                        }
-                    },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(if (isId) "EN" else "ID")
-                }
+            Spacer(modifier = Modifier.width(8.dp))
+
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        configManager.saveState(state.copy(language = if (isId) "en" else "id"))
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(if (isId) "EN" else "ID")
             }
         }
 
@@ -263,7 +293,11 @@ fun ProfileConfigTab(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val activeProfile = state.profiles.find { it.id == state.activeProfileId } ?: state.profiles.first()
+    val safeProfiles = state.profiles.ifEmpty { AppStateData().profiles }
+    val safePaperProfiles = state.paperProfiles.ifEmpty { AppStateData().paperProfiles }
+    val safeTemplates = state.templates.ifEmpty { AppStateData().templates }
+
+    val activeProfile = safeProfiles.find { it.id == state.activeProfileId } ?: safeProfiles.first()
 
     var profileName by remember(activeProfile) { mutableStateOf(activeProfile.profileName) }
     var printerName by remember(activeProfile) { mutableStateOf(activeProfile.printerName) }
@@ -271,8 +305,9 @@ fun ProfileConfigTab(
     var printMode by remember(activeProfile) { mutableStateOf(activeProfile.printMode) }
     var selectedPaperProfileId by remember(activeProfile) { mutableStateOf(activeProfile.activePaperProfileId) }
     var selectedTemplateId by remember(activeProfile) { mutableStateOf(activeProfile.activeTemplateId) }
-    var selectedPaperProfile = state.paperProfiles.find { it.id == selectedPaperProfileId }
-        ?: state.paperProfiles.first()
+
+    val selectedPaperProfile = safePaperProfiles.find { it.id == selectedPaperProfileId }
+        ?: safePaperProfiles.first()
 
     val autoMaxCharsNormal = ThermalPrintEngine.calculateAutoMaxChars(
         widthMm = selectedPaperProfile.widthMm,
@@ -308,7 +343,7 @@ fun ProfileConfigTab(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 20.dp),
+            .padding(horizontal = 16.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
@@ -336,7 +371,7 @@ fun ProfileConfigTab(
                     expanded = showProfileDropdown,
                     onDismissRequest = { showProfileDropdown = false }
                 ) {
-                    state.profiles.forEach { prof ->
+                    safeProfiles.forEach { prof ->
                         DropdownMenuItem(
                             text = { Text(prof.profileName) },
                             onClick = {
@@ -351,10 +386,10 @@ fun ProfileConfigTab(
             }
 
             FilledTonalButton(onClick = {
-                val firstPaper = state.paperProfiles.first()
+                val firstPaper = safePaperProfiles.first()
                 val newProf = PrinterProfile(
                     id = UUID.randomUUID().toString(),
-                    profileName = "Profil Baru ${state.profiles.size + 1}",
+                    profileName = "Profil Baru ${safeProfiles.size + 1}",
                     activePaperProfileId = firstPaper.id,
                     paperWidthMm = firstPaper.widthMm,
                     labelHeightMm = firstPaper.heightMm,
@@ -366,7 +401,7 @@ fun ProfileConfigTab(
                     configManager.saveState(
                         state.copy(
                             activeProfileId = newProf.id,
-                            profiles = state.profiles + newProf
+                            profiles = safeProfiles + newProf
                         )
                     )
                 }
@@ -374,9 +409,9 @@ fun ProfileConfigTab(
                 Text("+ Baru")
             }
 
-            if (state.profiles.size > 1) {
+            if (safeProfiles.size > 1) {
                 TextButton(onClick = {
-                    val remaining = state.profiles.filterNot { it.id == activeProfile.id }
+                    val remaining = safeProfiles.filterNot { it.id == activeProfile.id }
                     scope.launch {
                         configManager.saveState(
                             state.copy(
@@ -512,7 +547,7 @@ fun ProfileConfigTab(
                 expanded = showPaperDropdown,
                 onDismissRequest = { showPaperDropdown = false }
             ) {
-                state.paperProfiles.forEach { paper ->
+                safePaperProfiles.forEach { paper ->
                     DropdownMenuItem(
                         text = { Text("${paper.name} (${paper.widthMm}x${paper.heightMm}mm, Gap ${paper.gapMm}mm)") },
                         onClick = {
@@ -553,7 +588,7 @@ fun ProfileConfigTab(
             fontWeight = FontWeight.SemiBold
         )
 
-        val currentTemplate = state.templates.find { it.id == selectedTemplateId } ?: state.templates.first()
+        val currentTemplate = safeTemplates.find { it.id == selectedTemplateId } ?: safeTemplates.first()
         ExposedDropdownMenuBox(
             expanded = showTemplateDropdown,
             onExpandedChange = { showTemplateDropdown = !showTemplateDropdown }
@@ -569,7 +604,7 @@ fun ProfileConfigTab(
                 expanded = showTemplateDropdown,
                 onDismissRequest = { showTemplateDropdown = false }
             ) {
-                state.templates.forEach { tpl ->
+                safeTemplates.forEach { tpl ->
                     DropdownMenuItem(
                         text = { Text(tpl.name) },
                         onClick = {
@@ -603,7 +638,7 @@ fun ProfileConfigTab(
                         customMaxChars = selectedPaperProfile.customMaxChars,
                         activeTemplateId = selectedTemplateId
                     )
-                    val updatedList = state.profiles.map {
+                    val updatedList = safeProfiles.map {
                         if (it.id == updatedProfile.id) updatedProfile else it
                     }
                     scope.launch {
@@ -688,8 +723,9 @@ fun PaperSizeProfileTab(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var selectedPaperId by remember { mutableStateOf(state.paperProfiles.first().id) }
-    val currentPaper = state.paperProfiles.find { it.id == selectedPaperId } ?: state.paperProfiles.first()
+    val safePaperProfiles = state.paperProfiles.ifEmpty { AppStateData().paperProfiles }
+    var selectedPaperId by remember { mutableStateOf(safePaperProfiles.first().id) }
+    val currentPaper = safePaperProfiles.find { it.id == selectedPaperId } ?: safePaperProfiles.first()
 
     var paperName by remember(currentPaper) { mutableStateOf(currentPaper.name) }
     var widthStr by remember(currentPaper) { mutableStateOf(currentPaper.widthMm.toString()) }
@@ -757,23 +793,23 @@ fun PaperSizeProfileTab(
             FilledTonalButton(onClick = {
                 val newPaper = PaperSizeProfile(
                     id = UUID.randomUUID().toString(),
-                    name = "Kertas Baru ${state.paperProfiles.size + 1}",
+                    name = "Kertas Baru ${safePaperProfiles.size + 1}",
                     widthMm = 60,
                     heightMm = 40,
                     gapMm = 2,
                     marginMm = 3
                 )
                 scope.launch {
-                    configManager.saveState(state.copy(paperProfiles = state.paperProfiles + newPaper))
+                    configManager.saveState(state.copy(paperProfiles = safePaperProfiles + newPaper))
                     selectedPaperId = newPaper.id
                 }
             }) {
                 Text("+ Baru")
             }
 
-            if (state.paperProfiles.size > 1) {
+            if (safePaperProfiles.size > 1) {
                 TextButton(onClick = {
-                    val remaining = state.paperProfiles.filterNot { it.id == currentPaper.id }
+                    val remaining = safePaperProfiles.filterNot { it.id == currentPaper.id }
                     scope.launch {
                         configManager.saveState(state.copy(paperProfiles = remaining))
                         selectedPaperId = remaining.first().id
@@ -856,14 +892,6 @@ fun PaperSizeProfileTab(
                     text = "• ESC/POS: $escPosChars karakter / baris",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Text(
-                    text = if (isId)
-                        "Catatan: Biarkan kolom 'Batas Karakter' kosong agar aplikasi menghitung otomatis dari lebar kertas (mm)."
-                    else
-                        "Note: Leave 'Max Chars' blank for automatic calculation based on paper width.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
 
@@ -877,7 +905,7 @@ fun PaperSizeProfileTab(
                     marginMm = marginStr.toIntOrNull() ?: 3,
                     customMaxChars = customCharsStr.toIntOrNull() ?: 0
                 )
-                val updatedPaperList = state.paperProfiles.map {
+                val updatedPaperList = safePaperProfiles.map {
                     if (it.id == updatedPaper.id) updatedPaper else it
                 }
                 val syncedPrinterProfiles = state.profiles.map { prof ->
@@ -920,8 +948,9 @@ fun TemplateBuilderTab(
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    var selectedTplId by remember { mutableStateOf(state.templates.first().id) }
-    val currentTpl = state.templates.find { it.id == selectedTplId } ?: state.templates.first()
+    val safeTemplates = state.templates.ifEmpty { AppStateData().templates }
+    var selectedTplId by remember { mutableStateOf(safeTemplates.first().id) }
+    val currentTpl = safeTemplates.find { it.id == selectedTplId } ?: safeTemplates.first()
 
     var tplName by remember(currentTpl) { mutableStateOf(currentTpl.name) }
     var tplBody by remember(currentTpl) { mutableStateOf(currentTpl.bodyPattern) }
@@ -979,16 +1008,16 @@ fun TemplateBuilderTab(
                     bodyPattern = ""
                 )
                 scope.launch {
-                    configManager.saveState(state.copy(templates = state.templates + newTpl))
+                    configManager.saveState(state.copy(templates = safeTemplates + newTpl))
                     selectedTplId = newTpl.id
                 }
             }) {
                 Text("+ Baru")
             }
 
-            if (state.templates.size > 1) {
+            if (safeTemplates.size > 1) {
                 TextButton(onClick = {
-                    val remaining = state.templates.filterNot { it.id == currentTpl.id }
+                    val remaining = safeTemplates.filterNot { it.id == currentTpl.id }
                     scope.launch {
                         configManager.saveState(state.copy(templates = remaining))
                         selectedTplId = remaining.first().id
@@ -1048,7 +1077,7 @@ fun TemplateBuilderTab(
         Button(
             onClick = {
                 val updatedTpl = currentTpl.copy(name = tplName, bodyPattern = tplBody)
-                val updatedList = state.templates.map { if (it.id == updatedTpl.id) updatedTpl else it }
+                val updatedList = safeTemplates.map { if (it.id == updatedTpl.id) updatedTpl else it }
                 scope.launch {
                     configManager.saveState(state.copy(templates = updatedList))
                     Toast.makeText(context, "Template '${tplName}' berhasil disimpan!", Toast.LENGTH_SHORT).show()
